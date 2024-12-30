@@ -1,32 +1,32 @@
 import discord
+from discord.ext import commands
 import os
 from dotenv import load_dotenv
 
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, MessagesState, StateGraph
-from langchain_core.messages import BaseMessage
+from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
-
+from langchain_core.messages import BaseMessage
 from typing_extensions import Annotated, TypedDict
 from typing import Sequence
 
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
-
 class DiscordMessagesState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     author: str
 
+intents = discord.Intents.default()
+intents.message_content = True
 
-class WhiteTiger(discord.Client):
-    def __init__(self, intents):
-        super().__init__(intents=intents)
-        self.target_channel = None
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+
+class WhiteTigerAI:
+    def __init__(self):
         self.llm = ChatOllama(
             model="llama3.2",
             temperature=0,
@@ -41,7 +41,6 @@ class WhiteTiger(discord.Client):
             ]
         )
         self.chain = self.prompt | self.llm
-
         self.init_memory()
 
     def init_memory(self):
@@ -58,52 +57,31 @@ class WhiteTiger(discord.Client):
         self.app = workflow.compile(checkpointer=self.memory)
         self.config = {"configurable": {"thread_id": "dashnet_events"}}
 
-    async def on_ready(self):
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
-        print("------")
-        await self.select_channel()
+    def generate_reply(self, author, content):
+        state = {
+            "messages": [HumanMessage(f"{author}: {content}")],
+            "author": author,
+        }
+        result = self.app.invoke(state, self.config)
+        return result["messages"][-1].content
 
-    async def select_channel(self):
-        print("Available channels:")
-        for channel in self.get_all_channels():
-            if isinstance(channel, discord.TextChannel):
-                print(f"{channel.name} (ID: {channel.id})")
+white_tiger_bot = WhiteTigerAI()
 
-        channel_name = input("Enter the name of the channel to use: ")
-        for channel in self.get_all_channels():
-            if channel.name == channel_name and isinstance(
-                channel, discord.TextChannel
-            ):
-                self.target_channel = channel
-                print(f"Channel set to: {channel.name} (ID: {channel.id})")
-                break
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("------")
+    
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author == bot.user or message.author.bot: return
+    content = message.content
+    author = message.author.name
 
-        if self.target_channel is None:
-            print("Channel not found. Please restart the bot and try again.")
-            await self.close()
+    if bot.user in message.mentions:
+        content = content.split(">")[1:] 
+        response = white_tiger_bot.generate_reply(author, content)
+        await message.reply(response, mention_author=False)
+    await bot.process_commands(message) 
 
-    async def on_message(self, message):
-        if (
-            self.target_channel
-            and message.channel.id == self.target_channel.id
-            and message.author.id != self.user.id
-        ):
-            print(f"Message from {message.author}: {message.content}")
-            reply = self.app.invoke(
-                {
-                    "messages": [HumanMessage(f"{message.author}: {message.content}")],
-                    "author": str(message.author)
-                },
-                self.config
-            )
-
-            await message.reply(
-                reply["messages"][-1].content, mention_author=True
-            )
-
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-client = WhiteTiger(intents=intents)
-client.run(TOKEN)
+bot.run(TOKEN)
